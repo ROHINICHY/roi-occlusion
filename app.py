@@ -6,7 +6,7 @@ import pandas as pd
 from PIL import Image
 
 st.set_page_config(page_title="DRDO ROI Occlusion System", layout="wide")
-st.title("DRDO ROI Occlusion System (Stable Version)")
+st.title("DRDO ROI Occlusion System (Final Stable)")
 
 uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
@@ -19,7 +19,7 @@ tfile = tempfile.NamedTemporaryFile(delete=False)
 tfile.write(uploaded_video.read())
 video_path = tfile.name
 
-# Show uploaded video
+# Show uploaded video preview
 st.subheader("Uploaded Video Preview")
 st.video(video_path)
 
@@ -40,11 +40,13 @@ if not ret:
 # Convert frame to RGB
 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-# Convert to PIL (Fix Streamlit TypeError)
+# Convert to PIL
 frame_pil = Image.fromarray(frame_rgb)
 
 st.subheader(f"Selected Frame Preview (Frame No: {frame_no})")
-st.image(frame_pil, use_container_width=True)
+
+# ✅ FIXED IMAGE DISPLAY
+st.image(frame_pil, width=900)
 
 h_img, w_img = frame_rgb.shape[:2]
 
@@ -70,17 +72,16 @@ if y + h > h_img:
     st.error("❌ ROI height goes outside frame. Reduce h or y.")
     st.stop()
 
-# Show ROI preview
+# ROI preview
 roi_preview = frame_rgb[y:y+h, x:x+w]
-
 roi_pil = Image.fromarray(roi_preview)
 
 st.subheader("ROI Preview (Selected Object)")
-st.image(roi_pil, caption="This is your selected ROI object", use_container_width=False)
+st.image(roi_pil, width=400)
 
 st.success(f"ROI Selected ✅ x={x}, y={y}, w={w}, h={h}")
 
-# Run Analysis
+# Run analysis
 if st.button("Run Occlusion Analysis"):
     cap = cv2.VideoCapture(video_path)
 
@@ -134,11 +135,12 @@ if st.button("Run Occlusion Analysis"):
     st.subheader("Occlusion Data Table")
     st.dataframe(df)
 
-    # Download CSV
     csv = df.to_csv(index=False).encode("utf-8")
     st.download_button("⬇ Download Occlusion Data (CSV)", csv, "occlusion_data.csv", "text/csv")
 
     st.success("Occlusion Analysis Completed ✅")
+
+
 
 
 
