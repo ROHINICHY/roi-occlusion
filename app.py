@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import tempfile
 import pandas as pd
+from PIL import Image
 
 st.set_page_config(page_title="DRDO ROI Occlusion System", layout="wide")
 st.title("DRDO ROI Occlusion System (Stable Version)")
@@ -36,11 +37,14 @@ if not ret:
     st.error("Could not read frame from video.")
     st.stop()
 
-# Convert to RGB for display
+# Convert frame to RGB
 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
+# Convert to PIL (Fix Streamlit TypeError)
+frame_pil = Image.fromarray(frame_rgb)
+
 st.subheader(f"Selected Frame Preview (Frame No: {frame_no})")
-st.image(frame_rgb, use_container_width=True)
+st.image(frame_pil, use_container_width=True)
 
 h_img, w_img = frame_rgb.shape[:2]
 
@@ -69,8 +73,10 @@ if y + h > h_img:
 # Show ROI preview
 roi_preview = frame_rgb[y:y+h, x:x+w]
 
+roi_pil = Image.fromarray(roi_preview)
+
 st.subheader("ROI Preview (Selected Object)")
-st.image(roi_preview, caption="This is your selected ROI object", use_container_width=False)
+st.image(roi_pil, caption="This is your selected ROI object", use_container_width=False)
 
 st.success(f"ROI Selected ✅ x={x}, y={y}, w={w}, h={h}")
 
@@ -78,7 +84,6 @@ st.success(f"ROI Selected ✅ x={x}, y={y}, w={w}, h={h}")
 if st.button("Run Occlusion Analysis"):
     cap = cv2.VideoCapture(video_path)
 
-    # Read selected frame again for template
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
     ret, first_frame = cap.read()
 
@@ -134,6 +139,8 @@ if st.button("Run Occlusion Analysis"):
     st.download_button("⬇ Download Occlusion Data (CSV)", csv, "occlusion_data.csv", "text/csv")
 
     st.success("Occlusion Analysis Completed ✅")
+
+
 
 
 
