@@ -42,9 +42,9 @@ frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
 # Show selected frame preview
 st.subheader("Selected Frame Preview")
-st.image(frame_rgb, caption=f"Frame No: {frame_no}", use_container_width=True)
+st.image(frame_rgb, caption=f"Frame No: {frame_no}", width=800)
 
-# Resize frame for canvas (important for Streamlit cloud)
+# Resize frame for canvas
 st.subheader("Draw Bounding Box on Object")
 
 display_width = 800
@@ -73,7 +73,7 @@ if canvas_result.json_data is None or len(canvas_result.json_data["objects"]) ==
 
 obj = canvas_result.json_data["objects"][-1]
 
-# Canvas ROI (resized coordinates)
+# ROI from canvas coordinates
 x1 = int(obj["left"])
 y1 = int(obj["top"])
 w1 = int(obj["width"])
@@ -90,12 +90,12 @@ h = int(h1 * scale_y)
 
 st.success(f"ROI Selected ✅ x={x}, y={y}, w={w}, h={h}")
 
-# Ensure ROI is valid
+# Validate ROI
 if w <= 5 or h <= 5:
     st.error("ROI too small. Please draw a bigger box.")
     st.stop()
 
-# Run Analysis
+# Run analysis
 if st.button("Run Occlusion Analysis"):
     cap = cv2.VideoCapture(video_path)
 
@@ -125,7 +125,6 @@ if st.button("Run Occlusion Analysis"):
 
         gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
 
-        # Crop same ROI location
         roi_now = gray[y:y+h, x:x+w]
 
         if roi_now.size == 0:
@@ -133,8 +132,6 @@ if st.button("Run Occlusion Analysis"):
         else:
             roi_now = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
             diff = cv2.absdiff(roi_template, roi_now)
-
-            # Occlusion approximation
             occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
 
         frames_list.append(f)
@@ -159,6 +156,8 @@ if st.button("Run Occlusion Analysis"):
     st.dataframe(df)
 
     st.success("Occlusion Analysis Completed ✅")
+
+
 
 
 
