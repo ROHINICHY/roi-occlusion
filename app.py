@@ -5,7 +5,6 @@ import tempfile
 import pandas as pd
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
-import io
 
 st.set_page_config(page_title="DRDO ROI Occlusion System", layout="wide")
 st.title("DRDO ROI Occlusion System")
@@ -21,8 +20,7 @@ tfile = tempfile.NamedTemporaryFile(delete=False)
 tfile.write(uploaded_video.read())
 video_path = tfile.name
 
-# Video Preview
-st.subheader("Video Preview")
+# Show uploaded video preview
 st.video(video_path)
 
 cap = cv2.VideoCapture(video_path)
@@ -42,64 +40,53 @@ if not ret:
 # Convert to RGB
 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-# Show frame preview
-st.subheader("Selected Frame Preview (Reference)")
-st.image(frame_rgb, caption=f"Frame No: {frame_no}", width=900)
+# ---------------- FIX: Resize Frame for Canvas ----------------
+original_h, original_w = frame_rgb.shape[:2]
 
-# Resize frame for canvas
-display_width = 900
-h_img, w_img, _ = frame_rgb.shape
-aspect_ratio = h_img / w_img
-display_height = int(display_width * aspect_ratio)
+canvas_width = 900  # fixed width for Streamlit canvas
+scale = canvas_width / original_w
+canvas_height = int(original_h * scale)
 
-frame_resized = cv2.resize(frame_rgb, (display_width, display_height))
+frame_resized = cv2.resize(frame_rgb, (canvas_width, canvas_height))
 img_pil = Image.fromarray(frame_resized)
-
-# Convert PIL to PNG bytes (MOST IMPORTANT FIX)
-buf = io.BytesIO()
-img_pil.save(buf, format="PNG")
-buf.seek(0)
-img_bytes = buf.read()
 
 st.subheader("Draw Bounding Box on Object (ROI Selection)")
 
 canvas_result = st_canvas(
-    fill_color="rgba(255, 0, 0, 0.25)",
-    stroke_width=3,
+    fill_color="rgba(255, 0, 0, 0.2)",
+    stroke_width=2,
     stroke_color="red",
-    background_image=Image.open(io.BytesIO(img_bytes)),
+    background_image=img_pil,
     update_streamlit=True,
-    height=display_height,
-    width=display_width,
+    height=canvas_height,
+    width=canvas_width,
     drawing_mode="rect",
     key="canvas",
 )
 
-# If ROI not selected
+# Extract ROI from canvas
 if canvas_result.json_data is None or len(canvas_result.json_data["objects"]) == 0:
-    st.info("👉 Draw a rectangle on the object to select ROI.")
+    st.info("Draw a rectangle on the object to select ROI.")
     st.stop()
 
 obj = canvas_result.json_data["objects"][-1]
 
-# ROI from canvas coordinates
-x1 = int(obj["left"])
-y1 = int(obj["top"])
-w1 = int(obj["width"])
-h1 = int(obj["height"])
+# ROI from resized frame
+x_resized = int(obj["left"])
+y_resized = int(obj["top"])
+w_resized = int(obj["width"])
+h_resized = int(obj["height"])
 
-# Scale ROI back to original frame size
-scale_x = w_img / display_width
-scale_y = h_img / display_height
-
-x = int(x1 * scale_x)
-y = int(y1 * scale_y)
-w = int(w1 * scale_x)
-h = int(h1 * scale_y)
+# Convert ROI back to original frame scale
+x = int(x_resized / scale)
+y = int(y_resized / scale)
+w = int(w_resized / scale)
+h = int(h_resized / scale)
 
 st.success(f"ROI Selected ✅ x={x}, y={y}, w={w}, h={h}")
 
-if w <= 5 or h <= 5:
+# ROI validation
+if w <= 10 or h <= 10:
     st.error("ROI too small. Please draw a bigger box.")
     st.stop()
 
@@ -110,6 +97,7 @@ if st.button("Run Occlusion Analysis"):
     frames_list = []
     occlusion_per_frame = []
 
+    # Read ROI template from selected frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
     ret, first_frame = cap.read()
 
@@ -118,6 +106,7 @@ if st.button("Run Occlusion Analysis"):
         st.stop()
 
     first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+
     roi_template = first_gray[y:y+h, x:x+w]
 
     if roi_template.size == 0:
@@ -131,6 +120,7 @@ if st.button("Run Occlusion Analysis"):
             break
 
         gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+
         roi_now = gray[y:y+h, x:x+w]
 
         if roi_now.size == 0:
@@ -138,6 +128,7 @@ if st.button("Run Occlusion Analysis"):
         else:
             roi_now = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
             diff = cv2.absdiff(roi_template, roi_now)
+
             occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
 
         frames_list.append(f)
@@ -145,6 +136,10 @@ if st.button("Run Occlusion Analysis"):
         f += 1
 
     cap.release()
+
+    if len(occlusion_per_frame) == 0:
+        st.error("No frames processed. Please upload another video.")
+        st.stop()
 
     df = pd.DataFrame({
         "Frame": frames_list,
@@ -157,11 +152,9 @@ if st.button("Run Occlusion Analysis"):
     st.subheader("Occlusion Data Table")
     st.dataframe(df)
 
-    # Download CSV
-    csv = df.to_csv(index=False).encode("utf-8")
-    st.download_button("⬇ Download Occlusion Data CSV", csv, "occlusion_data.csv", "text/csv")
-
     st.success("Occlusion Analysis Completed ✅")
+
+
 
 
 
