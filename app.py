@@ -7,7 +7,6 @@ from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(page_title="DRDO ROI Occlusion System", layout="wide")
-
 st.title("DRDO ROI Occlusion System")
 
 uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
@@ -40,14 +39,21 @@ img_pil = Image.fromarray(frame_rgb)
 
 st.subheader("Draw Bounding Box on Object")
 
+# ✅ Resize for Streamlit Cloud (important)
+display_width = 700
+aspect_ratio = img_pil.size[1] / img_pil.size[0]
+display_height = int(display_width * aspect_ratio)
+
+img_display = img_pil.resize((display_width, display_height))
+
 canvas_result = st_canvas(
     fill_color="rgba(255, 0, 0, 0.2)",
     stroke_width=2,
     stroke_color="red",
-    background_image=img_pil,
+    background_image=img_display,
     update_streamlit=True,
-    height=img_pil.size[1],
-    width=img_pil.size[0],
+    height=display_height,
+    width=display_width,
     drawing_mode="rect",
     key="canvas",
 )
@@ -59,10 +65,21 @@ if canvas_result.json_data is None or len(canvas_result.json_data["objects"]) ==
 
 obj = canvas_result.json_data["objects"][-1]
 
-x = int(obj["left"])
-y = int(obj["top"])
-w = int(obj["width"])
-h = int(obj["height"])
+# Coordinates on resized canvas
+x1 = int(obj["left"])
+y1 = int(obj["top"])
+w1 = int(obj["width"])
+h1 = int(obj["height"])
+
+# Scale factors
+scale_x = img_pil.size[0] / display_width
+scale_y = img_pil.size[1] / display_height
+
+# Convert to original frame coordinates
+x = int(x1 * scale_x)
+y = int(y1 * scale_y)
+w = int(w1 * scale_x)
+h = int(h1 * scale_y)
 
 st.success(f"ROI Selected ✅ x={x}, y={y}, w={w}, h={h}")
 
@@ -78,7 +95,7 @@ if st.button("Run Occlusion Analysis"):
     frames_list = []
     occlusion_per_frame = []
 
-    # Read first ROI template
+    # Read ROI template from selected frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
     ret, first_frame = cap.read()
     if not ret:
@@ -100,7 +117,6 @@ if st.button("Run Occlusion Analysis"):
 
         gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
 
-        # Crop same ROI location (no tracking) - Cloud safe
         roi_now = gray[y:y+h, x:x+w]
 
         if roi_now.size == 0:
@@ -109,7 +125,6 @@ if st.button("Run Occlusion Analysis"):
             roi_now = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
             diff = cv2.absdiff(roi_template, roi_now)
 
-            # Occlusion approximation
             occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
 
         frames_list.append(f)
@@ -134,6 +149,7 @@ if st.button("Run Occlusion Analysis"):
     st.dataframe(df)
 
     st.success("Occlusion Analysis Completed ✅")
+
 
 
 
