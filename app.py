@@ -1,121 +1,125 @@
 import streamlit as st
 import cv2
 import numpy as np
-import tempfile
-import pandas as pd
 from PIL import Image
+from streamlit_drawable_canvas import st_canvas
+import tempfile
 
-st.set_page_config(page_title="DRDO ROI Occlusion System", layout="wide")
-st.title("DRDO ROI Occlusion System")
+st.set_page_config(page_title="DRDO ROI Occlusion", layout="wide")
 
+st.title("🎯 DRDO ROI Occlusion Detection (ROI Selection + Output Video)")
+
+# Upload video
 uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
-if uploaded_video is None:
-    st.warning("Please upload a video first.")
-    st.stop()
+if uploaded_video is not None:
 
-# Save uploaded video
-tfile = tempfile.NamedTemporaryFile(delete=False)
-tfile.write(uploaded_video.read())
-video_path = tfile.name
+    # Save uploaded video to temp file
+    tfile = tempfile.NamedTemporaryFile(delete=False)
+    tfile.write(uploaded_video.read())
 
-st.subheader("Uploaded Video Preview")
-st.video(video_path)
+    cap = cv2.VideoCapture(tfile.name)
 
-cap = cv2.VideoCapture(video_path)
-total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-st.success(f"Video Loaded Successfully ✅ Total Frames: {total_frames}")
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS)
 
-frame_no = st.slider("Select Frame for ROI Selection", 0, total_frames - 1, 0)
+    st.success(f"✅ Video Loaded Successfully | Total Frames: {total_frames}")
 
-cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-ret, frame = cap.read()
-
-if not ret:
-    st.error("Could not read frame from video.")
-    st.stop()
-
-frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-frame_pil = Image.fromarray(frame_rgb)
-
-st.subheader(f"Selected Frame Preview (Frame No: {frame_no})")
-st.image(frame_pil, width=900)
-
-st.markdown("## Select ROI using Two Clicks (Top-Left and Bottom-Right)")
-st.info("Step 1: Enter Top-Left (x1,y1)\n\nStep 2: Enter Bottom-Right (x2,y2)")
-
-h_img, w_img = frame_rgb.shape[:2]
-
-col1, col2 = st.columns(2)
-
-with col1:
-    x1 = st.number_input("Top-Left X (x1)", min_value=0, max_value=w_img-1, value=0)
-    y1 = st.number_input("Top-Left Y (y1)", min_value=0, max_value=h_img-1, value=0)
-
-with col2:
-    x2 = st.number_input("Bottom-Right X (x2)", min_value=0, max_value=w_img-1, value=min(100, w_img-1))
-    y2 = st.number_input("Bottom-Right Y (y2)", min_value=0, max_value=h_img-1, value=min(100, h_img-1))
-
-# Validate ROI
-if x2 <= x1 or y2 <= y1:
-    st.error("❌ Invalid ROI: x2 must be > x1 and y2 must be > y1")
-    st.stop()
-
-roi_preview = frame_rgb[int(y1):int(y2), int(x1):int(x2)]
-
-st.subheader("ROI Preview (Selected Object)")
-st.image(Image.fromarray(roi_preview), width=400)
-
-if st.button("Run Occlusion Analysis"):
-    cap = cv2.VideoCapture(video_path)
+    # Select frame
+    frame_no = st.slider("Select Frame for ROI Selection", 0, total_frames - 1, 0)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-    ret, first_frame = cap.read()
+    ret, frame = cap.read()
+
     if not ret:
-        st.error("Failed to read selected frame again.")
+        st.error("❌ Could not read the selected frame!")
         st.stop()
 
-    first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
-    roi_template = first_gray[int(y1):int(y2), int(x1):int(x2)]
+    # Convert to RGB for display
+    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    pil_img = Image.fromarray(frame_rgb)
 
-    if roi_template.size == 0:
-        st.error("ROI template extraction failed.")
-        st.stop()
+    st.subheader(f"Selected Frame Preview (Frame No: {frame_no})")
+    st.image(pil_img, use_container_width=True)
 
-    frames_list = []
-    occlusion_list = []
+    st.subheader("🟥 Draw Bounding Box on Object (ROI Selection)")
 
-    f = 0
-    while True:
-        ret, fr = cap.read()
-        if not ret:
-            break
+    # Canvas size (same as image)
+    canvas_width = pil_img.size[0]
+    canvas_height = pil_img.size[1]
 
-        gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-        roi_now = gray[int(y1):int(y2), int(x1):int(x2)]
+    # Draw ROI on canvas
+    canvas_result = st_canvas(
+        fill_color="rgba(255, 0, 0, 0.2)",  # transparent red
+        stroke_width=3,
+        stroke_color="red",
+        background_image=pil_img,  # ✅ THIS MAKES FRAME VISIBLE
+        update_streamlit=True,
+        height=canvas_height,
+        width=canvas_width,
+        drawing_mode="rect",
+        key="canvas",
+    )
 
-        if roi_now.size == 0:
-            occlusion_percent = 100
+    # Extract ROI box
+    if canvas_result.json_data is not None:
+        objects = canvas_result.json_data["objects"]
+
+        if len(objects) > 0:
+            rect = objects[-1]
+
+            x = int(rect["left"])
+            y = int(rect["top"])
+            w = int(rect["width"])
+            h = int(rect["height"])
+
+            st.success(f"✅ ROI Selected: x={x}, y={y}, w={w}, h={h}")
+
+            # Crop ROI preview
+            roi_crop = frame_rgb[y:y+h, x:x+w]
+            if roi_crop.size > 0:
+                st.subheader("📌 ROI Preview (Selected Object)")
+                st.image(roi_crop, use_container_width=False)
+
+            # Process video button
+            if st.button("▶️ Generate Output Video with ROI Highlight"):
+                cap.release()
+                cap = cv2.VideoCapture(tfile.name)
+
+                output_path = "output_roi_video.mp4"
+                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+
+                while True:
+                    ret, frm = cap.read()
+                    if not ret:
+                        break
+
+                    # Draw ROI rectangle
+                    cv2.rectangle(frm, (x, y), (x + w, y + h), (0, 0, 255), 2)
+                    out.write(frm)
+
+                cap.release()
+                out.release()
+
+                st.success("✅ Output video generated successfully!")
+
+                with open(output_path, "rb") as f:
+                    st.download_button(
+                        "⬇️ Download Output Video",
+                        data=f,
+                        file_name="roi_output.mp4",
+                        mime="video/mp4"
+                    )
+
         else:
-            roi_now = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
-            diff = cv2.absdiff(roi_template, roi_now)
-            occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
+            st.warning("⚠️ Please draw a rectangle on the frame to select ROI.")
 
-        frames_list.append(f)
-        occlusion_list.append(round(float(occlusion_percent), 2))
-        f += 1
 
-    cap.release()
-
-    df = pd.DataFrame({"Frame": frames_list, "Occlusion (%)": occlusion_list})
-
-    st.subheader("Occlusion Graph (Frame vs Occlusion %)")
-    st.line_chart(df.set_index("Frame"))
-
-    st.subheader("Occlusion Data Table")
-    st.dataframe(df)
-
-    st.success("Occlusion Analysis Completed ✅")
 
 
 
