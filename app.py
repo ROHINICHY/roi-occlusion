@@ -5,317 +5,465 @@ import tempfile
 import pandas as pd
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
-import time
+import matplotlib.pyplot as plt
 
-st.set_page_config(page_title="DRDO ROI Occlusion System", layout="wide")
-st.title("DRDO ROI Occlusion System - Real-time Smoke Analysis")
+# Page Configuration
+st.set_page_config(
+    page_title="DRDO ROI Occlusion System",
+    page_icon="🛡️",
+    layout="wide"
+)
 
-# Initialize session state variables
+# Custom CSS for DRDO theme
+st.markdown("""
+<style>
+    /* Main theme colors */
+    :root {
+        --drdo-blue: #003366;
+        --drdo-red: #cc0000;
+        --drdo-gold: #ffcc00;
+    }
+    
+    .main-header {
+        background: linear-gradient(135deg, var(--drdo-blue), #004488);
+        padding: 1.5rem;
+        border-radius: 10px;
+        color: white;
+        text-align: center;
+        margin-bottom: 2rem;
+        border-left: 8px solid var(--drdo-red);
+    }
+    
+    .drdo-title {
+        color: var(--drdo-gold);
+        font-size: 2.5rem;
+        font-weight: bold;
+        margin-bottom: 0.5rem;
+    }
+    
+    .drdo-subtitle {
+        color: white;
+        font-size: 1.2rem;
+        opacity: 0.9;
+    }
+    
+    .section-header {
+        background-color: #f0f2f6;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 5px solid var(--drdo-blue);
+        margin: 1rem 0;
+        font-weight: bold;
+    }
+    
+    .metric-card {
+        background: white;
+        padding: 1rem;
+        border-radius: 10px;
+        border: 2px solid var(--drdo-blue);
+        box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+    }
+    
+    .stButton>button {
+        background: linear-gradient(135deg, var(--drdo-blue), #004488);
+        color: white;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        border-radius: 8px;
+        font-weight: bold;
+        transition: all 0.3s ease;
+    }
+    
+    .stButton>button:hover {
+        background: linear-gradient(135deg, #004488, var(--drdo-blue));
+        transform: translateY(-2px);
+        box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+    }
+    
+    .success-box {
+        background-color: #d4edda;
+        border: 2px solid #c3e6cb;
+        color: #155724;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
+    
+    .warning-box {
+        background-color: #fff3cd;
+        border: 2px solid #ffeaa7;
+        color: #856404;
+        padding: 1rem;
+        border-radius: 8px;
+        margin: 1rem 0;
+    }
+    
+    /* Hide default Streamlit elements */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Custom table styling */
+    .dataframe {
+        width: 100%;
+        border-collapse: collapse;
+    }
+    
+    .dataframe th {
+        background-color: var(--drdo-blue);
+        color: white;
+        padding: 12px;
+        text-align: left;
+    }
+    
+    .dataframe td {
+        padding: 10px;
+        border-bottom: 1px solid #ddd;
+    }
+    
+    .dataframe tr:hover {
+        background-color: #f5f5f5;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Header Section
+st.markdown("""
+<div class="main-header">
+    <div class="drdo-title">Defence Research and Development Organisation</div>
+    <div class="drdo-subtitle">Jodhpur - ROI Occlusion Analysis System</div>
+</div>
+""", unsafe_allow_html=True)
+
+# Initialize session state
 if 'video_processed' not in st.session_state:
     st.session_state.video_processed = False
-if 'roi_selected' not in st.session_state:
-    st.session_state.roi_selected = False
-if 'analysis_running' not in st.session_state:
-    st.session_state.analysis_running = False
-if 'occlusion_data' not in st.session_state:
-    st.session_state.occlusion_data = pd.DataFrame(columns=["Frame", "Occlusion (%)"])
-if 'current_frame' not in st.session_state:
-    st.session_state.current_frame = 0
-if 'play_video' not in st.session_state:
-    st.session_state.play_video = False
 if 'roi_coordinates' not in st.session_state:
     st.session_state.roi_coordinates = None
+if 'analysis_done' not in st.session_state:
+    st.session_state.analysis_done = False
+if 'occlusion_data' not in st.session_state:
+    st.session_state.occlusion_data = None
 
-uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
+# Create columns for layout
+col1, col2 = st.columns([2, 1])
+
+with col1:
+    st.markdown('<div class="section-header">📹 Upload Input Video</div>', unsafe_allow_html=True)
+    
+    uploaded_video = st.file_uploader(
+        "Upload Video", 
+        type=["mp4", "avi", "mov", "MP4", "AVI", "MOV"],
+        label_visibility="collapsed",
+        help="Drag and drop file here. Limit 200MB per file - MP4, AVI, MPEG4"
+    )
 
 if uploaded_video is None:
-    st.warning("Please upload a video first.")
+    with col1:
+        st.markdown('<div class="warning-box">⚠️ Please upload a video to continue</div>', unsafe_allow_html=True)
     st.stop()
 
 # Save uploaded video
-tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
-tfile.write(uploaded_video.read())
-video_path = tfile.name
+with col1:
+    tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
+    tfile.write(uploaded_video.read())
+    video_path = tfile.name
+    
+    st.markdown(f"""
+    <div class="success-box">
+        ✅ Video uploaded successfully: {uploaded_video.name} ({uploaded_video.size//1024}KB)
+    </div>
+    """, unsafe_allow_html=True)
 
-# Show uploaded video preview
-st.subheader("Uploaded Video Preview")
-st.video(video_path)
-
+# Get video properties
 cap = cv2.VideoCapture(video_path)
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 fps = int(cap.get(cv2.CAP_PROP_FPS))
+width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+duration = total_frames / fps
 
-st.success(f"Video Loaded Successfully ✅ Total Frames: {total_frames}, FPS: {fps}")
+with col2:
+    st.markdown('<div class="section-header">📊 Video Information</div>', unsafe_allow_html=True)
+    st.markdown(f"""
+    <div class="metric-card">
+        <div style="font-size: 1.5rem; color: var(--drdo-blue); font-weight: bold;">Video Loaded Successfully</div>
+        <hr style="margin: 10px 0;">
+        <div><strong>Total Frames:</strong> {total_frames}</div>
+        <div><strong>FPS:</strong> {fps}</div>
+        <div><strong>Resolution:</strong> {width}×{height}</div>
+        <div><strong>Duration:</strong> {duration:.2f}s</div>
+        <div><strong>File Size:</strong> {uploaded_video.size//1024}KB</div>
+    </div>
+    """, unsafe_allow_html=True)
 
-# Create tabs for different functionalities
-tab1, tab2, tab3 = st.tabs(["ROI Selection", "Real-time Analysis", "Results"])
+# ROI Selection Section
+st.markdown('<div class="section-header">🎯 Select Frame for ROI Selection</div>', unsafe_allow_html=True)
 
-with tab1:
-    st.subheader("Select ROI on Frame")
-    
-    frame_no = st.slider("Select Frame for ROI Selection", 0, total_frames - 1, 0, 
-                         help="Use the slider to find the frame where the object is clearly visible")
-    
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-    ret, frame = cap.read()
-    
-    if not ret:
-        st.error("Could not read frame from video.")
-        st.stop()
-    
-    # Convert frame to RGB
-    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    frame_pil = Image.fromarray(frame_rgb)
-    
-    st.image(frame_pil, width=900, caption=f"Frame {frame_no}")
-    
-    # Resize image for canvas
-    CANVAS_W = 900
-    scale = CANVAS_W / frame_pil.size[0]
-    CANVAS_H = int(frame_pil.size[1] * scale)
-    
-    frame_pil_resized = frame_pil.resize((CANVAS_W, CANVAS_H))
-    
-    st.subheader("Draw Bounding Box on Object (ROI Selection)")
-    
-    canvas_result = st_canvas(
-        fill_color="rgba(255, 0, 0, 0.2)",
-        stroke_width=3,
-        stroke_color="red",
-        background_image=frame_pil_resized,
-        update_streamlit=True,
-        height=CANVAS_H,
-        width=CANVAS_W,
-        drawing_mode="rect",
-        key="canvas_roi",
-    )
-    
-    # Check if rectangle is drawn
-    if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) > 0:
-        # Get last rectangle
-        obj = canvas_result.json_data["objects"][-1]
-        
-        # ROI coordinates from resized canvas
-        x = int(obj["left"])
-        y = int(obj["top"])
-        w = int(obj["width"])
-        h = int(obj["height"])
-        
-        # Convert back to original frame coordinates
-        orig_x = int(x / scale)
-        orig_y = int(y / scale)
-        orig_w = int(w / scale)
-        orig_h = int(h / scale)
-        
-        st.session_state.roi_coordinates = (orig_x, orig_y, orig_w, orig_h)
-        
-        st.success(f"✅ ROI Selected - x={orig_x}, y={orig_y}, width={orig_w}, height={orig_h}")
-        
-        # ROI Preview
-        roi_preview = frame_rgb[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
-        
-        if roi_preview.size > 0:
-            st.image(Image.fromarray(roi_preview), width=400, caption="Selected ROI Preview")
-            st.session_state.roi_selected = True
-        else:
-            st.error("ROI extraction failed. Please draw ROI inside frame.")
-    else:
-        st.info("✍️ Please draw a rectangle on the object to select ROI.")
+frame_col1, frame_col2 = st.columns([3, 1])
 
-with tab2:
-    st.subheader("Real-time Occlusion Analysis")
+with frame_col1:
+    frame_no = st.slider("", 0, total_frames - 1, 48, label_visibility="collapsed")
+
+# Get the selected frame
+cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+ret, frame = cap.read()
+
+if not ret:
+    st.error("Could not read frame from video.")
+    st.stop()
+
+# Convert frame to RGB for display
+frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+frame_pil = Image.fromarray(frame_rgb)
+
+# Display frame
+st.markdown(f'<div style="text-align: center; font-weight: bold; margin: 10px 0;">Selected Frame Preview (Frame No: {frame_no})</div>', unsafe_allow_html=True)
+st.image(frame_pil, width=900)
+
+# ROI Selection Canvas
+st.markdown('<div class="section-header">🖱️ Draw Bounding Box on Object</div>', unsafe_allow_html=True)
+
+# Resize image for canvas
+CANVAS_W = 900
+scale = CANVAS_W / frame_pil.size[0]
+CANVAS_H = int(frame_pil.size[1] * scale)
+frame_pil_resized = frame_pil.resize((CANVAS_W, CANVAS_H))
+
+canvas_result = st_canvas(
+    fill_color="rgba(255, 0, 0, 0.3)",
+    stroke_width=3,
+    stroke_color="red",
+    background_image=frame_pil_resized,
+    update_streamlit=True,
+    height=CANVAS_H,
+    width=CANVAS_W,
+    drawing_mode="rect",
+    key="canvas_roi",
+)
+
+# Manual ROI Coordinates Input
+st.markdown('<div class="section-header">📐 Enter ROI Coordinates Manually (x, y, width, height)</div>', unsafe_allow_html=True)
+
+coord_col1, coord_col2, coord_col3, coord_col4 = st.columns(4)
+
+with coord_col1:
+    manual_x = st.number_input("x (left)", min_value=0, max_value=width, value=66)
+with coord_col2:
+    manual_y = st.number_input("y (top)", min_value=0, max_value=height, value=42)
+with coord_col3:
+    manual_w = st.number_input("width (w)", min_value=1, max_value=width, value=200)
+with coord_col4:
+    manual_h = st.number_input("height (h)", min_value=1, max_value=height, value=150)
+
+# Use either canvas or manual coordinates
+if canvas_result.json_data is not None and len(canvas_result.json_data["objects"]) > 0:
+    # Get rectangle from canvas
+    obj = canvas_result.json_data["objects"][-1]
+    x = int(obj["left"])
+    y = int(obj["top"])
+    w = int(obj["width"])
+    h = int(obj["height"])
     
-    if not st.session_state.roi_selected:
-        st.warning("Please select ROI first in the 'ROI Selection' tab.")
-    else:
-        col1, col2, col3 = st.columns(3)
+    # Convert back to original coordinates
+    orig_x = int(x / scale)
+    orig_y = int(y / scale)
+    orig_w = int(w / scale)
+    orig_h = int(h / scale)
+else:
+    # Use manual coordinates
+    orig_x = manual_x
+    orig_y = manual_y
+    orig_w = manual_w
+    orig_h = manual_h
+
+st.session_state.roi_coordinates = (orig_x, orig_y, orig_w, orig_h)
+
+# ROI Preview
+roi_preview = frame_rgb[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
+
+if roi_preview.size > 0:
+    st.markdown('<div class="section-header">🔍 ROI Preview (Selected Object)</div>', unsafe_allow_html=True)
+    st.image(Image.fromarray(roi_preview), width=400)
+    
+    st.markdown(f"""
+    <div class="success-box">
+        ✅ ROI Selected Successfully<br>
+        Position: ({orig_x}, {orig_y}) | Size: {orig_w}×{orig_h} | Area: {orig_w*orig_h} pixels
+    </div>
+    """, unsafe_allow_html=True)
+
+# Analysis Button
+st.markdown('<div class="section-header">🚀 Run Occlusion Analysis</div>', unsafe_allow_html=True)
+
+if st.button("▶ Run Analysis", type="primary", use_container_width=True):
+    with st.spinner("Analyzing video frames..."):
+        cap = cv2.VideoCapture(video_path)
         
-        with col1:
-            if st.button("▶ Start Analysis", type="primary"):
-                st.session_state.analysis_running = True
-                st.session_state.occlusion_data = pd.DataFrame(columns=["Frame", "Occlusion (%)"])
-                st.session_state.current_frame = 0
+        # Get template from first frame
+        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        ret, first_frame = cap.read()
         
-        with col2:
-            if st.button("⏸ Pause Analysis"):
-                st.session_state.analysis_running = False
-        
-        with col3:
-            if st.button("🔄 Reset Analysis"):
-                st.session_state.analysis_running = False
-                st.session_state.occlusion_data = pd.DataFrame(columns=["Frame", "Occlusion (%)"])
-                st.session_state.current_frame = 0
-        
-        # Create placeholders for video and graph
-        video_placeholder = st.empty()
-        graph_placeholder = st.empty()
-        data_placeholder = st.empty()
-        
-        # Get ROI coordinates
-        orig_x, orig_y, orig_w, orig_h = st.session_state.roi_coordinates
-        
-        if st.session_state.analysis_running:
-            cap = cv2.VideoCapture(video_path)
+        if ret:
+            first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+            roi_template = first_gray[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
             
-            # Get template from first frame
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            ret, first_frame = cap.read()
+            if roi_template.size == 0:
+                st.error("ROI template extraction failed.")
+                st.stop()
             
-            if ret:
-                first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
-                roi_template = first_gray[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
+            frames_list = []
+            occlusion_list = []
+            
+            # Progress bar
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Analyze all frames
+            for f in range(total_frames):
+                cap.set(cv2.CAP_PROP_POS_FRAMES, f)
+                ret, frame = cap.read()
                 
-                # Reset to current frame
-                cap.set(cv2.CAP_PROP_POS_FRAMES, st.session_state.current_frame)
+                if not ret:
+                    break
                 
-                while st.session_state.analysis_running and st.session_state.current_frame < total_frames:
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    
-                    # Convert frame for display
-                    frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    
-                    # Draw ROI rectangle on frame
-                    cv2.rectangle(frame_rgb, (orig_x, orig_y), 
-                                (orig_x + orig_w, orig_y + orig_h), 
-                                (255, 0, 0), 3)
-                    
-                    # Calculate occlusion
-                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                    roi_now = gray[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
-                    
-                    if roi_now.size > 0 and roi_template.size > 0:
-                        # Ensure same size
-                        roi_now_resized = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
-                        
-                        # Calculate difference
-                        diff = cv2.absdiff(roi_template, roi_now_resized)
-                        
-                        # Calculate occlusion percentage
-                        occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
-                        
-                        # Add to session state
-                        new_data = pd.DataFrame({
-                            "Frame": [st.session_state.current_frame],
-                            "Occlusion (%)": [round(float(occlusion_percent), 2)]
-                        })
-                        
-                        st.session_state.occlusion_data = pd.concat([st.session_state.occlusion_data, new_data], ignore_index=True)
-                        
-                        # Add occlusion text to frame
-                        cv2.putText(frame_rgb, f"Occlusion: {occlusion_percent:.1f}%", 
-                                  (orig_x, orig_y - 10), 
-                                  cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    
-                    # Display frame
-                    video_placeholder.image(frame_rgb, width=900, 
-                                          caption=f"Frame: {st.session_state.current_frame}/{total_frames}")
-                    
-                    # Update graph
-                    if not st.session_state.occlusion_data.empty:
-                        graph_placeholder.line_chart(st.session_state.occlusion_data.set_index("Frame"))
-                    
-                    # Update current frame
-                    st.session_state.current_frame += 1
-                    
-                    # Small delay to simulate real-time playback
-                    time.sleep(1/fps)
+                # Calculate occlusion
+                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                roi_now = gray[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
                 
-                cap.release()
+                if roi_now.size > 0:
+                    roi_now_resized = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
+                    diff = cv2.absdiff(roi_template, roi_now_resized)
+                    occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
+                else:
+                    occlusion_percent = 100
+                
+                frames_list.append(f)
+                occlusion_list.append(round(float(occlusion_percent), 2))
+                
+                # Update progress
+                progress = (f + 1) / total_frames
+                progress_bar.progress(progress)
+                status_text.text(f"Processing frame {f+1}/{total_frames}...")
+            
+            cap.release()
+            
+            # Create dataframe
+            df = pd.DataFrame({
+                "Frame": frames_list,
+                "Occlusion (%)": occlusion_list
+            })
+            
+            st.session_state.occlusion_data = df
+            st.session_state.analysis_done = True
+            
+            st.markdown('<div class="success-box">✅ Occlusion Analysis Completed</div>', unsafe_allow_html=True)
 
-with tab3:
-    st.subheader("Analysis Results")
+# Display Results
+if st.session_state.analysis_done and st.session_state.occlusion_data is not None:
+    df = st.session_state.occlusion_data
     
-    if not st.session_state.occlusion_data.empty:
-        col1, col2 = st.columns(2)
+    # Create two columns for graph and stats
+    results_col1, results_col2 = st.columns([2, 1])
+    
+    with results_col1:
+        st.markdown('<div class="section-header">📈 Occlusion Graph (Frame vs Occlusion %)</div>', unsafe_allow_html=True)
         
-        with col1:
-            st.metric("Total Frames Analyzed", len(st.session_state.occlusion_data))
+        # Create matplotlib figure for better control
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(df["Frame"], df["Occlusion (%)"], color='red', linewidth=2)
+        ax.set_xlabel('Frame Number', fontsize=12, fontweight='bold')
+        ax.set_ylabel('Occlusion Percentage', fontsize=12, fontweight='bold')
+        ax.set_title('Object Occlusion Over Time', fontsize=14, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.set_xlim(0, total_frames)
+        ax.set_ylim(0, 100)
         
-        with col2:
-            avg_occlusion = st.session_state.occlusion_data["Occlusion (%)"].mean()
-            st.metric("Average Occlusion", f"{avg_occlusion:.2f}%")
+        # Highlight high occlusion areas
+        high_occlusion = df[df["Occlusion (%)"] > 50]
+        if not high_occlusion.empty:
+            ax.fill_between(high_occlusion["Frame"], high_occlusion["Occlusion (%)"], 
+                           color='orange', alpha=0.3, label='High Occlusion (>50%)')
         
-        st.subheader("Occlusion Graph")
-        st.line_chart(st.session_state.occlusion_data.set_index("Frame"))
+        # Add legend
+        ax.legend()
         
-        st.subheader("Detailed Data")
-        st.dataframe(st.session_state.occlusion_data)
+        st.pyplot(fig)
+    
+    with results_col2:
+        st.markdown('<div class="section-header">📊 Statistics</div>', unsafe_allow_html=True)
         
-        # Calculate statistics
-        st.subheader("Statistics")
+        avg_occlusion = df["Occlusion (%)"].mean()
+        max_occlusion = df["Occlusion (%)"].max()
+        min_occlusion = df["Occlusion (%)"].min()
+        std_occlusion = df["Occlusion (%)"].std()
         
-        max_occlusion = st.session_state.occlusion_data["Occlusion (%)"].max()
-        min_occlusion = st.session_state.occlusion_data["Occlusion (%)"].min()
-        std_occlusion = st.session_state.occlusion_data["Occlusion (%)"].std()
+        st.markdown(f"""
+        <div class="metric-card">
+            <div style="text-align: center; margin-bottom: 15px;">
+                <div style="font-size: 0.9rem; color: #666;">Average Occlusion</div>
+                <div style="font-size: 2rem; color: var(--drdo-blue); font-weight: bold;">{avg_occlusion:.1f}%</div>
+            </div>
+            <hr>
+            <div style="display: flex; justify-content: space-between;">
+                <div>
+                    <div style="font-size: 0.8rem; color: #666;">Max</div>
+                    <div style="font-size: 1.2rem; font-weight: bold;">{max_occlusion:.1f}%</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.8rem; color: #666;">Min</div>
+                    <div style="font-size: 1.2rem; font-weight: bold;">{min_occlusion:.1f}%</div>
+                </div>
+                <div>
+                    <div style="font-size: 0.8rem; color: #666;">Std Dev</div>
+                    <div style="font-size: 1.2rem; font-weight: bold;">{std_occlusion:.1f}</div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
         
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Max Occlusion", f"{max_occlusion:.2f}%")
-        col2.metric("Min Occlusion", f"{min_occlusion:.2f}%")
-        col3.metric("Std Deviation", f"{std_occlusion:.2f}%")
+        # Calculate frames with significant occlusion
+        significant_occlusion = len(df[df["Occlusion (%)"] > 30])
+        percent_significant = (significant_occlusion / len(df)) * 100
         
-        # Find frames with high occlusion (> 50%)
-        high_occlusion_frames = st.session_state.occlusion_data[
-            st.session_state.occlusion_data["Occlusion (%)"] > 50
-        ]
-        
-        if not high_occlusion_frames.empty:
-            st.info(f"⚠️ High occlusion detected in {len(high_occlusion_frames)} frames")
-        
-        # Download button
-        csv = st.session_state.occlusion_data.to_csv(index=False).encode("utf-8")
+        st.metric(
+            label="Frames with >30% Occlusion",
+            value=f"{significant_occlusion}",
+            delta=f"{percent_significant:.1f}% of total"
+        )
+    
+    # Data Table
+    st.markdown('<div class="section-header">📋 Occlusion Data Table</div>', unsafe_allow_html=True)
+    
+    # Show first 10 rows by default
+    show_all = st.checkbox("Show all data", value=False)
+    
+    if show_all:
+        st.dataframe(df, use_container_width=True)
+    else:
+        st.dataframe(df.head(10), use_container_width=True)
+        st.caption(f"Showing first 10 of {len(df)} rows. Check 'Show all data' to see complete dataset.")
+    
+    # Download Button
+    csv = df.to_csv(index=False).encode("utf-8")
+    
+    download_col1, download_col2, download_col3 = st.columns([2, 1, 2])
+    with download_col2:
         st.download_button(
             "⬇ Download Occlusion Data (CSV)",
             csv,
-            "occlusion_analysis_results.csv",
+            "occlusion_data.csv",
             "text/csv",
-            key='download-csv'
+            use_container_width=True,
+            type="primary"
         )
-    else:
-        st.info("No analysis data available. Run the analysis in the 'Real-time Analysis' tab.")
 
-# Add sidebar with controls
-with st.sidebar:
-    st.header("Controls")
-    
-    st.subheader("Video Information")
-    st.write(f"Total Frames: {total_frames}")
-    st.write(f"FPS: {fps}")
-    st.write(f"Duration: {total_frames/fps:.2f} seconds")
-    
-    if st.session_state.roi_selected:
-        st.subheader("ROI Information")
-        orig_x, orig_y, orig_w, orig_h = st.session_state.roi_coordinates
-        st.write(f"Position: ({orig_x}, {orig_y})")
-        st.write(f"Size: {orig_w} x {orig_h}")
-    
-    st.subheader("Occlusion Threshold")
-    threshold = st.slider("Occlusion Threshold (%)", 0, 100, 30,
-                         help="Threshold for detecting significant occlusion")
-    
-    st.subheader("Export Options")
-    export_format = st.selectbox("Export Format", ["CSV", "Excel", "JSON"])
-    
-    if st.button("Generate Report"):
-        if not st.session_state.occlusion_data.empty:
-            st.success("Report generated successfully!")
-        else:
-            st.warning("No data available for report")
-
-# Add custom CSS for better UI
+# Footer
+st.markdown("---")
 st.markdown("""
-<style>
-    .stButton button {
-        width: 100%;
-    }
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 20px;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
-</style>
+<div style="text-align: center; color: #666; font-size: 0.9rem; padding: 1rem;">
+    <strong>DRDO Jodhpur</strong> | ROI Occlusion Analysis System v1.0 | © 2024 Defence Research and Development Organisation
+</div>
 """, unsafe_allow_html=True)
 
 # Cleanup
