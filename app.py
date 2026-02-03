@@ -2,137 +2,114 @@ import streamlit as st
 import cv2
 import numpy as np
 import tempfile
-import pandas as pd
+import subprocess
+import os
+from streamlit_drawable_canvas import st_canvas
+from PIL import Image
 
-st.set_page_config(page_title="ROI Occlusion System", layout="wide")
+# ---------------- PAGE CONFIG ----------------
+st.set_page_config(
+    page_title="ROI Occlusion Analysis System",
+    layout="wide"
+)
 
-st.title("🎯 ROI Occlusion System")
+# ---------------- HEADER ----------------
+st.markdown(
+    """
+    <h2 style='margin-bottom:0'>ROI Occlusion Analysis System</h2>
+    """,
+    unsafe_allow_html=True
+)
 
-uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
+st.markdown("---")
+
+# ---------------- VIDEO UPLOAD ----------------
+st.subheader("Upload Input Video")
+
+uploaded_video = st.file_uploader(
+    "Upload Video",
+    type=["mp4", "avi", "mpeg4"]
+)
 
 if uploaded_video is None:
-    st.warning("Please upload a video first.")
+    st.info("Please upload a video to continue")
     st.stop()
 
-# Save uploaded video to temp file
-tfile = tempfile.NamedTemporaryFile(delete=False)
-tfile.write(uploaded_video.read())
-video_path = tfile.name
+# Save uploaded video
+temp_video = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
+temp_video.write(uploaded_video.read())
+video_path = temp_video.name
 
+# ---------------- LOAD VIDEO ----------------
 cap = cv2.VideoCapture(video_path)
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-fps = cap.get(cv2.CAP_PROP_FPS)
 
-st.success(f"✅ Video Loaded Successfully | Total Frames: {total_frames} | FPS: {round(fps, 2)}")
+# ---------------- FRAME SELECT ----------------
+st.subheader("Select Frame for ROI Selection")
+frame_id = st.slider("Frame Number", 0, total_frames - 1, 0)
 
-frame_no = st.slider("Select Frame for ROI Selection", 0, total_frames - 1, 0)
-
-cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+cap.set(cv2.CAP_PROP_POS_FRAMES, frame_id)
 ret, frame = cap.read()
 
 if not ret:
-    st.error("❌ Could not read selected frame from video.")
+    st.error("Could not read frame")
     st.stop()
 
 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+pil_image = Image.fromarray(frame_rgb)
 
-st.subheader(f"📌 Selected Frame Preview (Frame No: {frame_no})")
+# ---------------- LAYOUT ----------------
+left_col, right_col = st.columns([1, 1])
 
-# Get image size
-h_img, w_img, _ = frame_rgb.shape
+# ---------------- LEFT: DRAW ROI ----------------
+with left_col:
+    st.subheader("Draw Bounding Box on Object")
 
-# ROI Selection Inputs
-st.subheader("🟥 Select ROI (Object)")
+    canvas = st_canvas(
+        fill_color="rgba(255, 0, 0, 0.3)",
+        stroke_width=2,
+        stroke_color="#ff0000",
+        background_image=pil_image,   # MUST be PIL Image
+        update_streamlit=True,
+        height=pil_image.height,
+        width=pil_image.width,
+        drawing_mode="rect",
+        key="canvas",
+    )
 
-col1, col2, col3, col4 = st.columns(4)
+    if canvas.json_data and len(canvas.json_data["objects"]) > 0:
+        rect = canvas.json_data["objects"][0]
 
-with col1:
-    x = st.number_input("x (left)", min_value=0, max_value=w_img - 1, value=50)
-with col2:
-    y = st.number_input("y (top)", min_value=0, max_value=h_img - 1, value=50)
-with col3:
-    w = st.number_input("width", min_value=1, max_value=w_img - int(x), value=100)
-with col4:
-    h = st.number_input("height", min_value=1, max_value=h_img - int(y), value=100)
+        x = int(rect["left"])
+        y = int(rect["top"])
+        w = int(rect["width"])
+        h = int(rect["height"])
 
-# Convert to int
-x, y, w, h = int(x), int(y), int(w), int(h)
+        roi = frame_rgb[y:y+h, x:x+w]
 
-# Draw ROI on preview
-preview = frame_rgb.copy()
-cv2.rectangle(preview, (x, y), (x + w, y + h), (255, 0, 0), 3)
+        st.success("ROI Selected")
+        st.image(roi, caption="Selected Object", use_column_width=True)
 
-st.image(preview, caption="ROI Preview (Rectangle on Frame)", use_container_width=True)
+        if st.button("Run Occlusion Analysis"):
+            st.info("Processing...")
 
-# ROI Crop Preview
-roi_crop = frame_rgb[y:y+h, x:x+w]
-if roi_crop.size > 0:
-    st.subheader("📌 ROI Crop Preview (Selected Object)")
-    st.image(roi_crop, use_container_width=False)
+            subprocess.run(
+                ["python", "index.py", video_path, str(x), str(y), str(w), str(h)],
+                capture_output=True,
+                text=True
+            )
 
-# Run Analysis Button
-st.subheader("📊 Occlusion Analysis")
+# ---------------- RIGHT: OUTPUT ----------------
+with right_col:
+    st.subheader("Output")
 
-if st.button("Run Occlusion Analysis"):
-    cap.release()
-    cap = cv2.VideoCapture(video_path)
+    if os.path.exists("occlusion_graph.png"):
+        st.image("occlusion_graph.png", caption="Occlusion Graph")
 
-    # Read template ROI from selected frame again
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-    ret, first_frame = cap.read()
+    if os.path.exists("occlusion_data.txt"):
+        with open("occlusion_data.txt") as f:
+            st.text(f.read())
 
-    if not ret:
-        st.error("❌ Failed to read selected frame again.")
-        st.stop()
-
-    first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
-    roi_template = first_gray[y:y+h, x:x+w]
-
-    if roi_template.size == 0:
-        st.error("❌ ROI extraction failed. Please keep ROI inside the frame.")
-        st.stop()
-
-    frames_list = []
-    occlusion_list = []
-
-    f = 0
-    while True:
-        ret, fr = cap.read()
-        if not ret:
-            break
-
-        gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-        roi_now = gray[y:y+h, x:x+w]
-
-        if roi_now.size == 0:
-            occlusion_percent = 100.0
-        else:
-            roi_now = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
-            diff = cv2.absdiff(roi_template, roi_now)
-            occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
-
-        frames_list.append(f)
-        occlusion_list.append(round(float(occlusion_percent), 2))
-        f += 1
-
-    cap.release()
-
-    if len(occlusion_list) == 0:
-        st.error("❌ No frames processed. Please upload another video.")
-        st.stop()
-
-    df = pd.DataFrame({
-        "Frame": frames_list,
-        "Occlusion (%)": occlusion_list
-    })
-
-    st.success("✅ Occlusion Analysis Completed!")
-
-    st.subheader("📈 Occlusion Graph (Frame vs Occlusion %)")
-    st.line_chart(df.set_index("Frame"))
-
-    st.subheader("📋 Occlusion Data Table")
-    st.dataframe(df, use_container_width=True)
 
 
 
