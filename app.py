@@ -6,11 +6,12 @@ from streamlit_drawable_canvas import st_canvas
 import tempfile
 import os
 
-st.set_page_config(page_title="DRDO ROI Occlusion", layout="wide")
+st.set_page_config(page_title="DRDO Occlusion Monitor", layout="wide")
 
-st.title("🎯 DRDO ROI Occlusion Detection")
-st.markdown("Select an ROI to monitor for occlusions in the video stream.")
+st.title("🎯 DRDO ROI Occlusion Detector")
+st.sidebar.header("Settings")
 
+# 1. Upload Video
 uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
 if uploaded_video is not None:
@@ -21,95 +22,102 @@ if uploaded_video is not None:
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     fps = cap.get(cv2.CAP_PROP_FPS)
 
-    # Frame Selection for ROI
-    frame_no = st.sidebar.slider("Select Frame for ROI", 0, total_frames - 1, 0)
+    # 2. Select Reference Frame
+    frame_no = st.sidebar.slider("Step 1: Select Reference Frame", 0, total_frames - 1, 0)
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-    ret, frame = cap.read()
+    ret, ref_frame = cap.read()
 
     if ret:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(frame_rgb)
+        ref_rgb = cv2.cvtColor(ref_frame, cv2.COLOR_BGR2RGB)
         
+        st.subheader("Step 2: Draw ROI around Target Object")
         # Canvas for ROI Selection
-        st.subheader("1. Define Target ROI")
         canvas_result = st_canvas(
             fill_color="rgba(255, 0, 0, 0.2)",
-            stroke_width=3,
-            stroke_color="red",
-            background_image=pil_img,
+            stroke_width=2,
+            stroke_color="#ff0000",
+            background_image=Image.fromarray(ref_rgb),
             update_streamlit=True,
-            height=pil_img.size[1],
-            width=pil_img.size[0],
+            height=ref_rgb.shape[0],
+            width=ref_rgb.shape[1],
             drawing_mode="rect",
             key="canvas",
         )
 
         if canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
-            rect = canvas_result.json_data["objects"][-1]
-            x, y, w, h = int(rect["left"]), int(rect["top"]), int(rect["width"]), int(rect["height"])
+            # Extract coordinates
+            obj = canvas_result.json_data["objects"][-1]
+            x, y, w, h = int(obj["left"]), int(obj["top"]), int(obj["width"]), int(obj["height"])
             
-            # Save the reference ROI for comparison
-            ref_roi = frame[y:y+h, x:x+w]
-            ref_gray = cv2.cvtColor(ref_roi, cv2.COLOR_BGR2GRAY)
+            # Crop the "Golden Template" (The object we are looking for)
+            template = ref_frame[y:y+h, x:x+w]
+            template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
 
-            st.success(f"ROI Locked at [{x}, {y}, {w}, {h}]")
+            st.sidebar.image(cv2.cvtColor(template, cv2.COLOR_BGR2RGB), caption="Target Template")
 
-            if st.button("▶️ Analyze Video for Occlusion"):
-                st.subheader("2. Analysis Output")
+            # 3. Process Video
+            if st.button("🚀 Run Occlusion Analysis"):
+                st.subheader("Analysis Stream")
                 
-                # Setup for processing
+                # Reset video to start
                 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                output_path = "processed_occlusion.mp4"
-                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-                out = cv2.VideoWriter(output_path, fourcc, fps, (frame.shape[1], frame.shape[0]))
                 
-                prog_bar = st.progress(0)
-                status_text = st.empty()
+                # Prepare Output
+                output_path = "occlusion_output.mp4"
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(output_path, fourcc, fps, (ref_frame.shape[1], ref_frame.shape[0]))
+                
+                # Placeholders for UI
                 video_placeholder = st.empty()
+                metrics_col1, metrics_col2 = st.columns(2)
+                occ_metric = metrics_col1.empty()
+                status_metric = metrics_col2.empty()
 
-                frame_count = 0
                 while cap.isOpened():
-                    ret, frm = cap.read()
+                    ret, frame = cap.read()
                     if not ret: break
 
-                    # Extract current frame ROI
-                    current_roi = frm[y:y+h, x:x+w]
+                    # Current ROI area
+                    current_roi = frame[y:y+h, x:x+w]
                     current_gray = cv2.cvtColor(current_roi, cv2.COLOR_BGR2GRAY)
 
-                    # --- SIMPLE OCCLUSION LOGIC ---
-                    # Calculate absolute difference between reference and current
-                    diff = cv2.absdiff(ref_gray, current_gray)
-                    _, thresh = cv2.threshold(diff, 30, 255, cv2.THRESH_BINARY)
-                    occlusion_pct = (np.sum(thresh == 255) / thresh.size) * 100
+                    # --- CALCULATE OCCLUSION ---
+                    # Using Normalized Cross-Correlation to find similarity
+                    res = cv2.matchTemplate(current_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(res)
                     
-                    # Determine Status
-                    status = "OCCLUDED" if occlusion_pct > 25 else "CLEAR" # Threshold 25%
-                    color = (0, 0, 255) if status == "OCCLUDED" else (0, 255, 0)
+                    # Convert similarity to occlusion percentage
+                    # max_val = 1 means 0% occlusion; max_val = 0 means 100% occlusion
+                    occlusion_pct = max(0, (1 - max_val) * 100)
+                    
+                    # Thresholding (e.g., if > 40% different, mark as occluded)
+                    is_occluded = occlusion_pct > 40
+                    box_color = (0, 0, 255) if is_occluded else (0, 255, 0)
+                    label = "OCCLUDED" if is_occluded else "CLEAR"
 
-                    # Annotate Frame
-                    cv2.rectangle(frm, (x, y), (x + w, y + h), color, 3)
-                    cv2.putText(frm, f"Status: {status}", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
-                    cv2.putText(frm, f"Occlusion: {occlusion_pct:.1f}%", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+                    # --- ANNOTATION ---
+                    cv2.rectangle(frame, (x, y), (x+w, y+h), box_color, 2)
+                    cv2.putText(frame, f"{label} ({occlusion_pct:.1f}%)", (x, y - 10),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.6, box_color, 2)
                     
-                    out.write(frm)
-                    
-                    # Update UI intermittently to save resources
-                    if frame_count % 5 == 0:
-                        video_placeholder.image(cv2.cvtColor(frm, cv2.COLOR_BGR2RGB), channels="RGB")
-                        prog_bar.progress(frame_count / total_frames)
-                        status_text.text(f"Processing Frame {frame_count}/{total_frames} | Occlusion: {occlusion_pct:.1f}%")
-                    
-                    frame_count += 1
+                    # Save Frame
+                    out.write(frame)
+
+                    # Update Live View
+                    if int(cap.get(cv2.CAP_PROP_POS_FRAMES)) % 2 == 0:
+                        video_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                        occ_metric.metric("Occlusion Level", f"{occlusion_pct:.1f}%")
+                        status_metric.metric("Status", label)
 
                 cap.release()
                 out.release()
-                prog_bar.progress(1.0)
+                
                 st.success("Analysis Complete!")
-
                 with open(output_path, "rb") as f:
-                    st.download_button("⬇️ Download Result", f, "occlusion_analysis.mp4")
+                    st.download_button("⬇️ Download Processed Video", f, "processed_video.mp4")
 
     cap.release()
+
 
 
 
