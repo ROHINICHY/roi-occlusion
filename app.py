@@ -1,142 +1,139 @@
 import streamlit as st
 import cv2
 import numpy as np
-from PIL import Image
-from streamlit_drawable_canvas import st_canvas
 import tempfile
 import pandas as pd
 
-st.set_page_config(page_title="DRDO Occlusion Monitor", layout="wide")
+st.set_page_config(page_title="ROI Occlusion System", layout="wide")
 
-st.title("🎯 DRDO ROI Occlusion Monitor")
+st.title("🎯 ROI Occlusion System")
 
-uploaded_video = st.file_uploader("Upload Video File", type=["mp4", "avi", "mov"])
+uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
-if uploaded_video is not None:
-    # Save video to temp file
-    tfile = tempfile.NamedTemporaryFile(delete=False)
-    tfile.write(uploaded_video.read())
-    
-    cap = cv2.VideoCapture(tfile.name)
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    # Sidebar: Frame Selection
-    st.sidebar.header("🕹️ Controls")
-    frame_no = st.sidebar.slider("Select Frame for ROI", 0, total_frames - 1, 0)
-    
+if uploaded_video is None:
+    st.warning("Please upload a video first.")
+    st.stop()
+
+# Save uploaded video to temp file
+tfile = tempfile.NamedTemporaryFile(delete=False)
+tfile.write(uploaded_video.read())
+video_path = tfile.name
+
+cap = cv2.VideoCapture(video_path)
+total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+fps = cap.get(cv2.CAP_PROP_FPS)
+
+st.success(f"✅ Video Loaded Successfully | Total Frames: {total_frames} | FPS: {round(fps, 2)}")
+
+frame_no = st.slider("Select Frame for ROI Selection", 0, total_frames - 1, 0)
+
+cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
+ret, frame = cap.read()
+
+if not ret:
+    st.error("❌ Could not read selected frame from video.")
+    st.stop()
+
+frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+st.subheader(f"📌 Selected Frame Preview (Frame No: {frame_no})")
+
+# Get image size
+h_img, w_img, _ = frame_rgb.shape
+
+# ROI Selection Inputs
+st.subheader("🟥 Select ROI (Object)")
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    x = st.number_input("x (left)", min_value=0, max_value=w_img - 1, value=50)
+with col2:
+    y = st.number_input("y (top)", min_value=0, max_value=h_img - 1, value=50)
+with col3:
+    w = st.number_input("width", min_value=1, max_value=w_img - int(x), value=100)
+with col4:
+    h = st.number_input("height", min_value=1, max_value=h_img - int(y), value=100)
+
+# Convert to int
+x, y, w, h = int(x), int(y), int(w), int(h)
+
+# Draw ROI on preview
+preview = frame_rgb.copy()
+cv2.rectangle(preview, (x, y), (x + w, y + h), (255, 0, 0), 3)
+
+st.image(preview, caption="ROI Preview (Rectangle on Frame)", use_container_width=True)
+
+# ROI Crop Preview
+roi_crop = frame_rgb[y:y+h, x:x+w]
+if roi_crop.size > 0:
+    st.subheader("📌 ROI Crop Preview (Selected Object)")
+    st.image(roi_crop, use_container_width=False)
+
+# Run Analysis Button
+st.subheader("📊 Occlusion Analysis")
+
+if st.button("Run Occlusion Analysis"):
+    cap.release()
+    cap = cv2.VideoCapture(video_path)
+
+    # Read template ROI from selected frame again
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-    ret, frame = cap.read()
-    
-    if ret:
-        # Convert BGR to RGB for PIL
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(frame_rgb)
-        
-        # Calculate scaling to make sure the image fits the screen
-        max_display_width = 1000
-        scale_ratio = max_display_width / pil_img.width
-        display_width = int(pil_img.width * scale_ratio)
-        display_height = int(pil_img.height * scale_ratio)
-        
-        # Resize image for the Canvas display
-        preview_img = pil_img.resize((display_width, display_height))
-        
-        st.subheader("📍 Step 1: Draw ROI on the Object")
-        st.caption(f"Original Resolution: {frame.shape[1]}x{frame.shape[0]} | Preview Scaling: {scale_ratio:.2f}")
+    ret, first_frame = cap.read()
 
-        # --- DRAWING CANVAS ---
-        canvas_result = st_canvas(
-            fill_color="rgba(255, 0, 0, 0.3)",
-            stroke_width=2,
-            stroke_color="#FF0000",
-            background_image=preview_img,
-            update_streamlit=True,
-            height=display_height,
-            width=display_width,
-            drawing_mode="rect",
-            key="roi_canvas",
-        )
+    if not ret:
+        st.error("❌ Failed to read selected frame again.")
+        st.stop()
 
-        # Check if ROI is drawn
-        if canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
-            obj = canvas_result.json_data["objects"][-1]
-            
-            # Re-scale coordinates back to original video size
-            x = int(obj["left"] / scale_ratio)
-            y = int(obj["top"] / scale_ratio)
-            w = int(obj["width"] / scale_ratio)
-            h = int(obj["height"] / scale_ratio)
+    first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
+    roi_template = first_gray[y:y+h, x:x+w]
 
-            # Display ROI Metrics
-            st.success(f"✅ ROI Captured: X={x}, Y={y}, Width={w}, Height={h}")
-            
-            # Template for matching
-            template = frame[y:y+h, x:x+w]
-            template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY)
+    if roi_template.size == 0:
+        st.error("❌ ROI extraction failed. Please keep ROI inside the frame.")
+        st.stop()
 
-            if st.button("🚀 Start Live Analysis"):
-                st.divider()
-                
-                # Layout for Live Video and Graph
-                col1, col2 = st.columns([1, 1])
-                
-                with col1:
-                    st.markdown("### 🎥 Live Video Feed")
-                    video_placeholder = st.empty()
-                
-                with col2:
-                    st.markdown("### 📈 Occlusion Graph (%)")
-                    chart_placeholder = st.empty()
-                    metric_placeholder = st.empty()
+    frames_list = []
+    occlusion_list = []
 
-                # Processing variables
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                occlusion_history = []
-                
-                # Process video
-                while cap.isOpened():
-                    ret, frame = cap.read()
-                    if not ret:
-                        break
-                    
-                    # 1. Extract current ROI area
-                    current_roi = frame[y:y+h, x:x+w]
-                    
-                    if current_roi.size > 0:
-                        # 2. Compare template to current frame
-                        current_gray = cv2.cvtColor(current_roi, cv2.COLOR_BGR2GRAY)
-                        res = cv2.matchTemplate(current_gray, template_gray, cv2.TM_CCOEFF_NORMED)
-                        _, max_val, _, _ = cv2.minMaxLoc(res)
-                        
-                        # Similarity to Occlusion Percentage
-                        occ_pct = round(max(0, (1 - max_val) * 100), 2)
-                    else:
-                        occ_pct = 100.0
+    f = 0
+    while True:
+        ret, fr = cap.read()
+        if not ret:
+            break
 
-                    occlusion_history.append(occ_pct)
-                    
-                    # 3. Draw on video frame
-                    box_color = (0, 0, 255) if occ_pct > 30 else (0, 255, 0) # Red if blocked
-                    cv2.rectangle(frame, (x, y), (x+w, y+h), box_color, 4)
-                    cv2.putText(frame, f"OCC: {occ_pct}%", (x, y-15), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1.2, box_color, 3)
+        gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+        roi_now = gray[y:y+h, x:x+w]
 
-                    # 4. Update Streamlit UI (Live)
-                    video_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    
-                    # Update Graph with only the last 100 data points for better visibility
-                    chart_placeholder.line_chart(occlusion_history)
-                    
-                    # Update Metric
-                    status_text = "⚠️ OCCLUDED" if occ_pct > 30 else "✅ CLEAR"
-                    metric_placeholder.metric("Current Occlusion", f"{occ_pct}%", status_text)
+        if roi_now.size == 0:
+            occlusion_percent = 100.0
+        else:
+            roi_now = cv2.resize(roi_now, (roi_template.shape[1], roi_template.shape[0]))
+            diff = cv2.absdiff(roi_template, roi_now)
+            occlusion_percent = (np.sum(diff > 30) / diff.size) * 100
 
-                cap.release()
-                st.balloons()
-                st.success("Video processing complete!")
+        frames_list.append(f)
+        occlusion_list.append(round(float(occlusion_percent), 2))
+        f += 1
 
     cap.release()
+
+    if len(occlusion_list) == 0:
+        st.error("❌ No frames processed. Please upload another video.")
+        st.stop()
+
+    df = pd.DataFrame({
+        "Frame": frames_list,
+        "Occlusion (%)": occlusion_list
+    })
+
+    st.success("✅ Occlusion Analysis Completed!")
+
+    st.subheader("📈 Occlusion Graph (Frame vs Occlusion %)")
+    st.line_chart(df.set_index("Frame"))
+
+    st.subheader("📋 Occlusion Data Table")
+    st.dataframe(df, use_container_width=True)
+
 
 
 
