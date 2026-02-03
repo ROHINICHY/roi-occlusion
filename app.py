@@ -4,9 +4,10 @@ import numpy as np
 import tempfile
 import pandas as pd
 from PIL import Image
+from streamlit_drawable_canvas import st_canvas
 
 st.set_page_config(page_title="DRDO ROI Occlusion System", layout="wide")
-st.title("DRDO ROI Occlusion System (Final Stable)")
+st.title("DRDO ROI Occlusion System (Draw ROI Box)")
 
 uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
@@ -39,47 +40,68 @@ if not ret:
 
 # Convert frame to RGB
 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-
-# Convert to PIL
 frame_pil = Image.fromarray(frame_rgb)
 
 st.subheader(f"Selected Frame Preview (Frame No: {frame_no})")
-
-# ✅ FIXED IMAGE DISPLAY
 st.image(frame_pil, width=900)
 
-h_img, w_img = frame_rgb.shape[:2]
+# Resize image for canvas (Cloud safe)
+CANVAS_W = 900
+scale = CANVAS_W / frame_pil.size[0]
+CANVAS_H = int(frame_pil.size[1] * scale)
 
-st.subheader("Enter ROI Coordinates Manually (x, y, width, height)")
+frame_pil_resized = frame_pil.resize((CANVAS_W, CANVAS_H))
 
-col1, col2, col3, col4 = st.columns(4)
+st.subheader("Draw Bounding Box on Object (ROI Selection)")
 
-with col1:
-    x = st.number_input("x (left)", min_value=0, max_value=w_img - 1, value=10)
-with col2:
-    y = st.number_input("y (top)", min_value=0, max_value=h_img - 1, value=10)
-with col3:
-    w = st.number_input("width (w)", min_value=1, max_value=w_img, value=100)
-with col4:
-    h = st.number_input("height (h)", min_value=1, max_value=h_img, value=100)
+canvas_result = st_canvas(
+    fill_color="rgba(255, 0, 0, 0.2)",
+    stroke_width=2,
+    stroke_color="red",
+    background_image=frame_pil_resized,
+    update_streamlit=True,
+    height=CANVAS_H,
+    width=CANVAS_W,
+    drawing_mode="rect",
+    key="canvas_roi",
+)
 
-# Validate ROI bounds
-if x + w > w_img:
-    st.error("❌ ROI width goes outside frame. Reduce w or x.")
+# Check if rectangle is drawn
+if canvas_result.json_data is None or len(canvas_result.json_data["objects"]) == 0:
+    st.info("✍️ Please draw a rectangle on the object to select ROI.")
     st.stop()
 
-if y + h > h_img:
-    st.error("❌ ROI height goes outside frame. Reduce h or y.")
+# Get last rectangle
+obj = canvas_result.json_data["objects"][-1]
+
+# ROI coordinates from resized canvas
+x = int(obj["left"])
+y = int(obj["top"])
+w = int(obj["width"])
+h = int(obj["height"])
+
+# Convert back to original frame coordinates
+orig_x = int(x / scale)
+orig_y = int(y / scale)
+orig_w = int(w / scale)
+orig_h = int(h / scale)
+
+st.success(f"ROI Selected ✅ x={orig_x}, y={orig_y}, w={orig_w}, h={orig_h}")
+
+# Validate ROI size
+if orig_w <= 5 or orig_h <= 5:
+    st.error("ROI too small. Please draw a bigger box.")
     st.stop()
 
-# ROI preview
-roi_preview = frame_rgb[y:y+h, x:x+w]
-roi_pil = Image.fromarray(roi_preview)
+# ROI Preview
+roi_preview = frame_rgb[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
+
+if roi_preview.size == 0:
+    st.error("ROI extraction failed. Please draw ROI inside frame.")
+    st.stop()
 
 st.subheader("ROI Preview (Selected Object)")
-st.image(roi_pil, width=400)
-
-st.success(f"ROI Selected ✅ x={x}, y={y}, w={w}, h={h}")
+st.image(Image.fromarray(roi_preview), width=400)
 
 # Run analysis
 if st.button("Run Occlusion Analysis"):
@@ -93,10 +115,10 @@ if st.button("Run Occlusion Analysis"):
         st.stop()
 
     first_gray = cv2.cvtColor(first_frame, cv2.COLOR_BGR2GRAY)
-    roi_template = first_gray[y:y+h, x:x+w]
+    roi_template = first_gray[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
 
     if roi_template.size == 0:
-        st.error("ROI extraction failed. Please correct ROI coordinates.")
+        st.error("ROI template extraction failed.")
         st.stop()
 
     frames_list = []
@@ -109,7 +131,7 @@ if st.button("Run Occlusion Analysis"):
             break
 
         gray = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-        roi_now = gray[y:y+h, x:x+w]
+        roi_now = gray[orig_y:orig_y+orig_h, orig_x:orig_x+orig_w]
 
         if roi_now.size == 0:
             occlusion_percent = 100
@@ -139,6 +161,7 @@ if st.button("Run Occlusion Analysis"):
     st.download_button("⬇ Download Occlusion Data (CSV)", csv, "occlusion_data.csv", "text/csv")
 
     st.success("Occlusion Analysis Completed ✅")
+
 
 
 
