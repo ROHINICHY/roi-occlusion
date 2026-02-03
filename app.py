@@ -5,8 +5,15 @@ import tempfile
 import pandas as pd
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
-import matplotlib.pyplot as plt
-import time
+import sys
+
+# Try to import matplotlib with fallback
+try:
+    import matplotlib.pyplot as plt
+    matplotlib_available = True
+except ImportError:
+    matplotlib_available = False
+    st.warning("Matplotlib not installed. Please add 'matplotlib' to requirements.txt")
 
 # Page Configuration
 st.set_page_config(
@@ -493,26 +500,31 @@ if st.session_state.analysis_done and st.session_state.occlusion_data is not Non
     with results_col1:
         st.markdown("### Occlusion Graph (Frame vs Occlusion %)")
         
-        # Create matplotlib figure for better control
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.plot(df["Frame"], df["Occlusion (%)"], color='red', linewidth=2, label='Occlusion (%)')
-        ax.set_xlabel('Frame Number', fontsize=12, fontweight='bold')
-        ax.set_ylabel('Occlusion Percentage', fontsize=12, fontweight='bold')
-        ax.set_title('Object Occlusion Over Time', fontsize=14, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.set_xlim(0, total_frames)
-        ax.set_ylim(0, 100)
-        
-        # Highlight high occlusion areas
-        high_occlusion = df[df["Occlusion (%)"] > 50]
-        if not high_occlusion.empty:
-            ax.fill_between(high_occlusion["Frame"], 0, high_occlusion["Occlusion (%)"], 
-                           color='orange', alpha=0.3, label='High Occlusion (>50%)')
-        
-        # Add legend
-        ax.legend()
-        
-        st.pyplot(fig)
+        if matplotlib_available:
+            # Create matplotlib figure for better control
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.plot(df["Frame"], df["Occlusion (%)"], color='red', linewidth=2, label='Occlusion (%)')
+            ax.set_xlabel('Frame Number', fontsize=12, fontweight='bold')
+            ax.set_ylabel('Occlusion Percentage', fontsize=12, fontweight='bold')
+            ax.set_title('Object Occlusion Over Time', fontsize=14, fontweight='bold')
+            ax.grid(True, alpha=0.3)
+            ax.set_xlim(0, total_frames)
+            ax.set_ylim(0, 100)
+            
+            # Highlight high occlusion areas
+            high_occlusion = df[df["Occlusion (%)"] > 50]
+            if not high_occlusion.empty:
+                ax.fill_between(high_occlusion["Frame"], 0, high_occlusion["Occlusion (%)"], 
+                               color='orange', alpha=0.3, label='High Occlusion (>50%)')
+            
+            # Add legend
+            ax.legend()
+            
+            st.pyplot(fig)
+        else:
+            # Fallback to Streamlit line chart if matplotlib not available
+            st.line_chart(df.set_index("Frame"))
+            st.warning("Using basic chart. Install matplotlib for enhanced visualization.")
     
     with results_col2:
         st.markdown("### Statistics")
