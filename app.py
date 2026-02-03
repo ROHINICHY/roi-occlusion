@@ -4,12 +4,12 @@ import numpy as np
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 import tempfile
+import io
 
 st.set_page_config(page_title="DRDO ROI Occlusion", layout="wide")
 
 st.title("🎯 DRDO ROI Occlusion Detection (ROI Selection + Output Video)")
 
-# Upload video
 uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
 if uploaded_video is not None:
@@ -25,7 +25,6 @@ if uploaded_video is not None:
 
     st.success(f"✅ Video Loaded Successfully | Total Frames: {total_frames}")
 
-    # Select frame
     frame_no = st.slider("Select Frame for ROI Selection", 0, total_frames - 1, 0)
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
@@ -35,7 +34,6 @@ if uploaded_video is not None:
         st.error("❌ Could not read the selected frame!")
         st.stop()
 
-    # Convert to RGB for display
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     pil_img = Image.fromarray(frame_rgb)
 
@@ -44,26 +42,26 @@ if uploaded_video is not None:
 
     st.subheader("🟥 Draw Bounding Box on Object (ROI Selection)")
 
-    # Canvas size (same as image)
-    canvas_width = pil_img.size[0]
-    canvas_height = pil_img.size[1]
+    # Convert PIL image to bytes (IMPORTANT FIX FOR STREAMLIT CLOUD)
+    img_bytes = io.BytesIO()
+    pil_img.save(img_bytes, format="PNG")
+    img_bytes.seek(0)
+    background_img = Image.open(img_bytes)
 
-    # Draw ROI on canvas
     canvas_result = st_canvas(
-        fill_color="rgba(255, 0, 0, 0.2)",  # transparent red
+        fill_color="rgba(255, 0, 0, 0.2)",
         stroke_width=3,
         stroke_color="red",
-        background_image=pil_img,  # ✅ THIS MAKES FRAME VISIBLE
+        background_image=background_img,   # ✅ FIXED
         update_streamlit=True,
-        height=canvas_height,
-        width=canvas_width,
+        height=pil_img.size[1],
+        width=pil_img.size[0],
         drawing_mode="rect",
         key="canvas",
     )
 
-    # Extract ROI box
     if canvas_result.json_data is not None:
-        objects = canvas_result.json_data["objects"]
+        objects = canvas_result.json_data.get("objects", [])
 
         if len(objects) > 0:
             rect = objects[-1]
@@ -75,13 +73,11 @@ if uploaded_video is not None:
 
             st.success(f"✅ ROI Selected: x={x}, y={y}, w={w}, h={h}")
 
-            # Crop ROI preview
             roi_crop = frame_rgb[y:y+h, x:x+w]
             if roi_crop.size > 0:
                 st.subheader("📌 ROI Preview (Selected Object)")
                 st.image(roi_crop, use_container_width=False)
 
-            # Process video button
             if st.button("▶️ Generate Output Video with ROI Highlight"):
                 cap.release()
                 cap = cv2.VideoCapture(tfile.name)
@@ -99,7 +95,6 @@ if uploaded_video is not None:
                     if not ret:
                         break
 
-                    # Draw ROI rectangle
                     cv2.rectangle(frm, (x, y), (x + w, y + h), (0, 0, 255), 2)
                     out.write(frm)
 
