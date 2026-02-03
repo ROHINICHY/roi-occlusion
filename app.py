@@ -4,132 +4,147 @@ import numpy as np
 from PIL import Image
 from streamlit_drawable_canvas import st_canvas
 import tempfile
+import time
 
-st.set_page_config(page_title="DRDO ROI Occlusion Monitor", layout="wide")
+st.set_page_config(page_title="DRDO Occlusion Lab", layout="wide")
 
-st.title("🎯 DRDO ROI Occlusion Monitor (Manual & Canvas Selection)")
+st.title("🎯 ROI Occlusion Detection & Live Graphing")
 
-uploaded_video = st.file_uploader("Upload Video File", type=["mp4", "avi", "mov"])
+# 1. Video Upload
+uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
 if uploaded_video is not None:
     tfile = tempfile.NamedTemporaryFile(delete=False)
     tfile.write(uploaded_video.read())
     
     cap = cv2.VideoCapture(tfile.name)
+    W = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+    H = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
-    # --- SIDEBAR CONTROLS ---
-    st.sidebar.header("🕹️ ROI Configuration")
-    frame_no = st.sidebar.slider("Select Frame for Reference", 0, total_frames - 1, 0)
-    
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("🔢 Manual Coordinate Input")
-    # Manual Input Fields
-    m_x = st.sidebar.number_input("X Coordinate", 0, width, 100)
-    m_y = st.sidebar.number_input("Y Coordinate", 0, height, 100)
-    m_w = st.sidebar.number_input("Width", 1, width - m_x, 200)
-    m_h = st.sidebar.number_input("Height", 1, height - m_y, 200)
-    
-    use_manual = st.sidebar.checkbox("Use Manual Coordinates", value=False)
 
-    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_no)
-    ret, frame = cap.read()
+    # --- SIDEBAR: MANUAL X, Y, W, H ---
+    st.sidebar.header("🕹️ ROI Manual Control")
+    use_manual = st.sidebar.toggle("Enable Manual Coordinates", value=False)
+    
+    # Manual Sliders/Inputs
+    mx = st.sidebar.number_input("X (Left)", 0, W, 100)
+    my = st.sidebar.number_input("Y (Top)", 0, H, 100)
+    mw = st.sidebar.number_input("Width", 10, W-mx, 150)
+    mh = st.sidebar.number_input("Height", 10, H-my, 150)
+
+    # Reference Frame Selector
+    ref_frame_idx = st.sidebar.slider("Select Reference Frame", 0, total_frames-1, 0)
+    
+    # Load Reference Frame
+    cap.set(cv2.CAP_PROP_POS_FRAMES, ref_frame_idx)
+    ret, ref_frame = cap.read()
     
     if ret:
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        pil_img = Image.fromarray(frame_rgb)
+        ref_rgb = cv2.cvtColor(ref_frame, cv2.COLOR_BGR2RGB)
         
-        # Scaling for the Display Canvas
-        max_display_width = 800
-        scale_ratio = max_display_width / width
-        d_width = int(width * scale_ratio)
-        d_height = int(height * scale_ratio)
-        preview_img = pil_img.resize((d_width, d_height))
+        st.subheader("📍 Step 1: Define Target ROI")
         
-        st.subheader("📍 Step 1: Define Your ROI")
-        col_canvas, col_preview = st.columns([2, 1])
-
-        with col_canvas:
-            st.caption("Draw on the image below OR use Sidebar to enter X, Y coordinates manually.")
-            canvas_result = st_canvas(
-                fill_color="rgba(255, 0, 0, 0.3)",
-                stroke_width=2,
-                stroke_color="#FF0000",
-                background_image=preview_img,
-                update_streamlit=True,
-                height=d_height,
-                width=d_width,
-                drawing_mode="rect",
-                key="roi_canvas",
-            )
-
-        # Logic to decide which coordinates to use
-        if use_manual:
-            final_x, final_y, final_w, final_h = m_x, m_y, m_w, m_h
-            st.sidebar.info(f"Using Manual: {final_x}, {final_y}, {final_w}, {final_h}")
-        elif canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
-            obj = canvas_result.json_data["objects"][-1]
-            final_x = int(obj["left"] / scale_ratio)
-            final_y = int(obj["top"] / scale_ratio)
-            final_w = int(obj["width"] / scale_ratio)
-            final_h = int(obj["height"] / scale_ratio)
-        else:
-            final_x, final_y, final_w, final_h = 0, 0, 0, 0
-
-        # Show selected ROI preview
-        if final_w > 0 and final_h > 0:
-            with col_preview:
-                st.markdown("### 🔍 Target Preview")
-                roi_crop = frame_rgb[final_y:final_y+final_h, final_x:final_x+final_w]
-                if roi_crop.size > 0:
-                    st.image(roi_crop, use_container_width=True)
-                    st.metric("ROI Geometry", f"{final_w}x{final_h}", f"X:{final_x} Y:{final_y}")
-
-            # --- LIVE ANALYSIS ---
-            if st.button("🚀 Start Live Processing"):
-                st.divider()
-                c1, c2 = st.columns([1, 1])
-                video_feed = c1.empty()
-                chart_feed = c2.empty()
+        # Display selection methods
+        col_c, col_p = st.columns([2, 1])
+        
+        with col_c:
+            if not use_manual:
+                # Canvas Selection
+                st.info("Drawing Mode: Use the rectangle tool on the frame.")
+                canvas_result = st_canvas(
+                    fill_color="rgba(255, 0, 0, 0.2)",
+                    stroke_width=2,
+                    stroke_color="red",
+                    background_image=Image.fromarray(ref_rgb).resize((700, int(700*(H/W)))),
+                    update_streamlit=True,
+                    height=int(700*(H/W)),
+                    width=700,
+                    drawing_mode="rect",
+                    key="canvas",
+                )
                 
-                # Setup Analysis
-                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                template_gray = cv2.cvtColor(frame[final_y:final_y+final_h, final_x:final_x+final_w], cv2.COLOR_BGR2GRAY)
-                occlusion_history = []
+                # Convert Canvas scale back to Video scale
+                if canvas_result.json_data and len(canvas_result.json_data["objects"]) > 0:
+                    obj = canvas_result.json_data["objects"][-1]
+                    scale = W / 700
+                    final_x, final_y = int(obj["left"] * scale), int(obj["top"] * scale)
+                    final_w, final_h = int(obj["width"] * scale), int(obj["height"] * scale)
+                else:
+                    final_x, final_y, final_w, final_h = 0, 0, 0, 0
+            else:
+                # Manual Selection
+                st.warning("Manual Mode: Using coordinates from the sidebar.")
+                final_x, final_y, final_w, final_h = mx, my, mw, mh
+                # Draw preview box on ref_rgb
+                preview_box = ref_rgb.copy()
+                cv2.rectangle(preview_box, (mx, my), (mx+mw, my+mh), (255, 0, 0), 5)
+                st.image(preview_box, caption="Manual ROI Preview", use_container_width=True)
 
-                while cap.isOpened():
-                    ret, frame = cap.read()
-                    if not ret: break
+        with col_p:
+            st.markdown("### 🔍 Target Template")
+            if final_w > 0 and final_h > 0:
+                template_img = ref_rgb[final_y:final_y+final_h, final_x:final_x+final_w]
+                if template_img.size > 0:
+                    st.image(template_img, caption=f"Tracking: {final_w}x{final_h}")
+                    st.write(f"**X:** {final_x}, **Y:** {final_y}")
+            else:
+                st.write("No ROI selected yet.")
+
+        # --- STEP 2: LIVE ANALYSIS ---
+        if st.button("🚀 Start Analysis") and final_w > 0:
+            st.divider()
+            
+            # Setup Layout
+            vid_col, graph_col = st.columns([1, 1])
+            vid_placeholder = vid_col.empty()
+            graph_placeholder = graph_col.empty()
+            metric_placeholder = st.sidebar.empty()
+
+            # Initialize tracking
+            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            template_gray = cv2.cvtColor(ref_frame[final_y:final_y+final_h, final_x:final_x+final_w], cv2.COLOR_BGR2GRAY)
+            
+            occlusion_history = []
+            
+            # Processing Loop
+            for i in range(total_frames):
+                ret, frame = cap.read()
+                if not ret: break
+                
+                # Extract current ROI
+                current_roi = frame[final_y:final_y+final_h, final_x:final_x+final_w]
+                
+                if current_roi.size > 0:
+                    current_gray = cv2.cvtColor(current_roi, cv2.COLOR_BGR2GRAY)
+                    # Template Matching for Similarity
+                    res = cv2.matchTemplate(current_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+                    _, max_val, _, _ = cv2.minMaxLoc(res)
                     
-                    # Core Occlusion Math
-                    current_roi = frame[final_y:final_y+final_h, final_x:final_x+final_w]
-                    if current_roi.size > 0:
-                        gray_roi = cv2.cvtColor(current_roi, cv2.COLOR_BGR2GRAY)
-                        res = cv2.matchTemplate(gray_roi, template_gray, cv2.TM_CCOEFF_NORMED)
-                        _, max_val, _, _ = cv2.minMaxLoc(res)
-                        occ_pct = round(max(0, (1 - max_val) * 100), 2)
-                    else:
-                        occ_pct = 100.0
+                    # Score to Percentage
+                    occ_score = max(0, (1 - max_val) * 100)
+                else:
+                    occ_score = 100.0
+                
+                occlusion_history.append(occ_score)
+                
+                # Visuals
+                color = (0, 0, 255) if occ_score > 30 else (0, 255, 0)
+                cv2.rectangle(frame, (final_x, final_y), (final_x+final_w, final_y+final_h), color, 4)
+                cv2.putText(frame, f"OCC: {occ_score:.1f}%", (final_x, final_y-10), 
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.2, color, 3)
 
-                    occlusion_history.append(occ_pct)
-                    
-                    # Visual Feedback
-                    box_color = (0, 0, 255) if occ_pct > 35 else (0, 255, 0)
-                    cv2.rectangle(frame, (final_x, final_y), (final_x+final_w, final_y+final_h), box_color, 4)
-                    cv2.putText(frame, f"OCCLUSION: {occ_pct}%", (final_x, final_y-15), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, box_color, 3)
+                # Live Updates (Every 2 frames for speed)
+                if i % 2 == 0:
+                    vid_placeholder.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+                    graph_placeholder.line_chart(occlusion_history)
+                    metric_placeholder.metric("Current Occlusion", f"{occ_score:.1f}%")
 
-                    # Update Streamlit UI
-                    video_feed.image(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                    chart_feed.line_chart(occlusion_history)
-
-                cap.release()
-                st.success("Analysis Finished.")
+            cap.release()
+            st.success("Analysis Complete!")
 
     cap.release()
+
 
 
 
