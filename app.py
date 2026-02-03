@@ -2,19 +2,17 @@ import streamlit as st
 import cv2
 import numpy as np
 from PIL import Image
-from streamlit_drawable_canvas import st_canvas
 import tempfile
-import io
 
 st.set_page_config(page_title="DRDO ROI Occlusion", layout="wide")
 
-st.title("🎯 DRDO ROI Occlusion Detection (ROI Selection + Output Video)")
+st.title("🎯 DRDO ROI Occlusion Detection")
 
 uploaded_video = st.file_uploader("Upload Video", type=["mp4", "avi", "mov"])
 
 if uploaded_video is not None:
 
-    # Save uploaded video to temp file
+    # Save video to temp file
     tfile = tempfile.NamedTemporaryFile(delete=False)
     tfile.write(uploaded_video.read())
 
@@ -31,89 +29,77 @@ if uploaded_video is not None:
     ret, frame = cap.read()
 
     if not ret:
-        st.error("❌ Could not read the selected frame!")
+        st.error("❌ Could not read selected frame.")
         st.stop()
 
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(frame_rgb)
 
     st.subheader(f"Selected Frame Preview (Frame No: {frame_no})")
-    st.image(pil_img, use_container_width=True)
 
-    st.subheader("🟥 Draw Bounding Box on Object (ROI Selection)")
+    # Image size
+    h_img, w_img, _ = frame_rgb.shape
 
-    # Convert PIL image to bytes (IMPORTANT FIX FOR STREAMLIT CLOUD)
-    img_bytes = io.BytesIO()
-    pil_img.save(img_bytes, format="PNG")
-    img_bytes.seek(0)
-    background_img = Image.open(img_bytes)
+    # ROI Inputs
+    st.subheader("🟥 Select ROI (Object)")
 
-    canvas_result = st_canvas(
-        fill_color="rgba(255, 0, 0, 0.2)",
-        stroke_width=3,
-        stroke_color="red",
-        background_image=background_img,   # ✅ FIXED
-        update_streamlit=True,
-        height=pil_img.size[1],
-        width=pil_img.size[0],
-        drawing_mode="rect",
-        key="canvas",
-    )
+    col1, col2, col3, col4 = st.columns(4)
 
-    if canvas_result.json_data is not None:
-        objects = canvas_result.json_data.get("objects", [])
+    with col1:
+        x = st.number_input("x (left)", min_value=0, max_value=w_img - 1, value=50)
+    with col2:
+        y = st.number_input("y (top)", min_value=0, max_value=h_img - 1, value=50)
+    with col3:
+        w = st.number_input("width", min_value=1, max_value=w_img - int(x), value=100)
+    with col4:
+        h = st.number_input("height", min_value=1, max_value=h_img - int(y), value=100)
 
-        if len(objects) > 0:
-            rect = objects[-1]
+    # Draw ROI rectangle on frame for preview
+    preview = frame_rgb.copy()
+    x, y, w, h = int(x), int(y), int(w), int(h)
 
-            x = int(rect["left"])
-            y = int(rect["top"])
-            w = int(rect["width"])
-            h = int(rect["height"])
+    cv2.rectangle(preview, (x, y), (x + w, y + h), (255, 0, 0), 3)
 
-            st.success(f"✅ ROI Selected: x={x}, y={y}, w={w}, h={h}")
+    st.image(preview, caption="ROI Preview (Rectangle on Frame)", use_container_width=True)
 
-            roi_crop = frame_rgb[y:y+h, x:x+w]
-            if roi_crop.size > 0:
-                st.subheader("📌 ROI Preview (Selected Object)")
-                st.image(roi_crop, use_container_width=False)
+    # ROI crop preview
+    roi_crop = frame_rgb[y:y+h, x:x+w]
+    if roi_crop.size > 0:
+        st.subheader("📌 ROI Crop Preview (Selected Object)")
+        st.image(roi_crop, use_container_width=False)
 
-            if st.button("▶️ Generate Output Video with ROI Highlight"):
-                cap.release()
-                cap = cv2.VideoCapture(tfile.name)
+    # Generate output video
+    if st.button("▶️ Generate Output Video with ROI Highlight"):
+        cap.release()
+        cap = cv2.VideoCapture(tfile.name)
 
-                output_path = "output_roi_video.mp4"
-                fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        output_path = "output_roi_video.mp4"
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
 
-                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
 
-                while True:
-                    ret, frm = cap.read()
-                    if not ret:
-                        break
+        while True:
+            ret, frm = cap.read()
+            if not ret:
+                break
 
-                    cv2.rectangle(frm, (x, y), (x + w, y + h), (0, 0, 255), 2)
-                    out.write(frm)
+            cv2.rectangle(frm, (x, y), (x + w, y + h), (0, 0, 255), 2)
+            out.write(frm)
 
-                cap.release()
-                out.release()
+        cap.release()
+        out.release()
 
-                st.success("✅ Output video generated successfully!")
+        st.success("✅ Output video generated successfully!")
 
-                with open(output_path, "rb") as f:
-                    st.download_button(
-                        "⬇️ Download Output Video",
-                        data=f,
-                        file_name="roi_output.mp4",
-                        mime="video/mp4"
-                    )
-
-        else:
-            st.warning("⚠️ Please draw a rectangle on the frame to select ROI.")
-
+        with open(output_path, "rb") as f:
+            st.download_button(
+                "⬇️ Download Output Video",
+                data=f,
+                file_name="roi_output.mp4",
+                mime="video/mp4"
+            )
 
 
 
